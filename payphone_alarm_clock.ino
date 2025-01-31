@@ -1,21 +1,30 @@
 #include <TM1637Display.h>
+#include "Time.h" // Class for managing time
 
-
+// INPUT
 const int dialPin = 2; // Triggers when rotary begins selection
 const int pulsePin = 3; // Counts number of pulse to derive number
 const int phoneLiftPin = 4; // Triggers when phone is lifted
 
-// For controlling TM1637 display
+// OUTPUT
+const int bellPin = 7; // Spins motor to ring bell
+
+// TM1637 Display
 const int CLK = 5;
 const int DIO = 6;
 TM1637Display display(CLK, DIO);
+
+
+Time initTime = Time(12, 0); // Set inital time to 12:00
+Time currTime = Time(millis(), initTime); // Set current time (can be changed later)
+Time alarm = Time(12, 0); // Dummy alarm time (will not go off until manually set by user)
 
 void setup() {
   pinMode(pulsePin, INPUT_PULLUP);
   pinMode(dialPin, INPUT_PULLUP);
   pinMode(phoneLiftPin, INPUT_PULLUP);
+  pinMode(bellPin, OUTPUT);
   display.setBrightness(0x0f);
-  //display.showNumberDecEx(0, 0b01000000, true); // '0b01000000' enables colon
 
   Serial.begin(9600);
   Serial.println("Execution started:\n");
@@ -34,9 +43,10 @@ int numDigits = 0; // Number of digits in time currently being entered
 unsigned long currMillis = millis();
 unsigned long prevMillis = millis(); // Used to store difference in time between animation phases
 int animationDelay = 300; // 300ms
+int ringDelay = 600;
 bool animationState = 0;
 
-// Returns the number dialed on the rotary, -1 if error
+// Counts pulses and returns the number that was input to rotary, -1 if error
 int GetDialedNumber() {
   int numPulses = 0;
   int currentState = 1;
@@ -51,11 +61,11 @@ int GetDialedNumber() {
     if (currMillis - prevMillis >= animationDelay) {
       prevMillis = currMillis;
       if (animationState) {
-        display.showNumberDecEx(0, 0b01000000, true);
+        display.showNumberDecEx(0, 0b01000000, true); // Flash zeroes
         animationState = 0;
       }
       else {
-        display.clear();
+        display.clear(); // Flash blank
         animationState = 1;
       }
     } 
@@ -76,6 +86,8 @@ int GetDialedNumber() {
   }
 }
 
+// Converts array of 4 digits to integer
+// Used for outputting full time to display
 int AlarmTimeToInt(int time[4]) {
   String timeStr = "";
   for (int i = 0; i < 4; i++) {
@@ -85,6 +97,7 @@ int AlarmTimeToInt(int time[4]) {
   return timeStr.toInt();
 }
 
+// Checks if array of 4 digits is a valid time to set alarm to
 bool IsValidTime(int time[4]) {
   if (time[0] * 10 + time[1] > 23) { return false; }
   else if (time[2] * 10 + time[3] > 59) { return false; }
@@ -93,13 +106,12 @@ bool IsValidTime(int time[4]) {
 
 void loop() {
   phoneLiftState = digitalRead(phoneLiftPin);
-  Serial.println(phoneLiftState);
   
   // While phone is lifted
   while (phoneLiftState) {
     phoneLiftState = digitalRead(phoneLiftPin);
     dialState = !digitalRead(dialPin);
-    display.setSegments(alarmTimeEncoded); // Display alarm time, whether partial or full, or blank if not set
+    display.setSegments(alarmTimeEncoded); // Display alarm time, blank if not set
 
     // If rotary begins to dial
     if (dialState) {
@@ -148,6 +160,8 @@ void loop() {
           delay(animationDelay);
         }
         isAlarmSet = true;
+        alarm.SetHour(alarmTime[0] * 10 + alarmTime[1]);
+        alarm.SetMinute(alarmTime[2] * 10 + alarmTime[3]);
       }
       // Flash zeroes if invalid time
       else {
@@ -173,6 +187,39 @@ void loop() {
       alarmTimeEncoded[i] = 0x00;
     }
     numDigits = 0;
+  }
+
+  currTime.SetTimeMillis(millis(), initTime); // Update current time
+  // When alarm time is reached
+  if (isAlarmSet && currTime == alarm) {
+    // Lift phone to turn off alarm
+    while(!phoneLiftState) {
+      phoneLiftState = digitalRead(phoneLiftPin);
+
+      // Flashing animation and ringing bell
+      currMillis = millis();
+      if (currMillis - prevMillis >= ringDelay) {
+        prevMillis = currMillis;
+        if (animationState) {
+          display.showNumberDecEx(0, 0b01000000, true); // Flash zeroes
+          digitalWrite(bellPin, HIGH); // Turn bell on
+          animationState = 0;
+        }
+        else {
+          display.clear(); // Flash blank
+          digitalWrite(bellPin, LOW); // Turn bell off
+          animationState = 1;
+        }
+      } 
+    }
+
+    // Clear alarm time
+    for (int i = 0; i < 4; i++) {
+        alarmTime[i] = -1;
+        alarmTimeEncoded[i] = 0x00;
+    }
+    numDigits = 0;
+    isAlarmSet = false;
   }
 
   display.clear(); // Clear display when phone is placed
